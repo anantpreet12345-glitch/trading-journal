@@ -1,48 +1,59 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-/** Weekly Trading Journal
- * - Centered white card on dark background
- * - Safe date handling (no crash when date is cleared)
- * - Notes, checklist, tags, screenshots, MT5 CSV import
- * - Local storage persistence + export/import JSON
- */
+/** -------------------- Local date helpers (timezone safe) -------------------- */
+
+// Build a Date at local midnight
+const atMidnight = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+// Format Date as YYYY-MM-DD in local time
+const fmt = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+// Parse "YYYY-MM-DD" to a local Date at midnight (never UTC)
+const parseYMD = (s) => {
+  if (!s) return null;
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  return new Date(+m[1], +m[2] - 1, +m[3]); // local midnight
+};
+
+// ISO week (Mon–Sun)
+const startOfISOWeek = (date) => {
+  const d = atMidnight(date);
+  const diff = (d.getDay() + 6) % 7; // 0 for Monday, 6 for Sunday
+  const s = new Date(d);
+  s.setDate(d.getDate() - diff);
+  return s;
+};
+const endOfISOWeek = (date) => {
+  const s = startOfISOWeek(date);
+  const e = new Date(s);
+  e.setDate(s.getDate() + 6);
+  return e;
+};
+const weekKey = (d) => `${fmt(startOfISOWeek(d))}_${fmt(endOfISOWeek(d))}`;
 
 function TradingJournalApp() {
-  // ---------- Helpers ----------
-  const toLocalDate = (d) => {
-    const dt = new Date(d);
-    dt.setHours(0, 0, 0, 0);
-    return dt;
-  };
-  const startOfISOWeek = (date) => {
-    const d = toLocalDate(date);
-    const day = (d.getDay() + 6) % 7; // 0=Mon ... 6=Sun
-    const s = new Date(d);
-    s.setDate(d.getDate() - day);
-    return s;
-  };
-  const endOfISOWeek = (date) => {
-    const s = startOfISOWeek(date);
-    const e = new Date(s);
-    e.setDate(s.getDate() + 6);
-    return e;
-  };
-  const fmt = (d) => d.toISOString().slice(0, 10);
-  const safeDate = (value) => {
-    const d = new Date(value);
-    return isNaN(d.getTime()) ? new Date() : d;
-  };
-  const weekKey = (d) => `${fmt(startOfISOWeek(d))}_${fmt(endOfISOWeek(d))}`;
+  /* ------------------------------ State ------------------------------ */
+  // Store the input's value as the raw string (e.g. "2025-09-08")
+  const [selectedYMD, setSelectedYMD] = useState(() => fmt(atMidnight(new Date())));
+  // Derive the actual Date object from that string
+  const selectedDate = useMemo(
+    () => parseYMD(selectedYMD) || atMidnight(new Date()),
+    [selectedYMD]
+  );
 
-  // ---------- State ----------
-  const [selectedDate, setSelectedDate] = useState(() => fmt(new Date()));
   const [entries, setEntries] = useState({});
   const [customChecks, setCustomChecks] = useState([]); // [{id,label}]
   const [filter, setFilter] = useState("");
   const [showPrintView, setShowPrintView] = useState(false);
   const STORAGE_KEY = "trading_journal_v2";
 
-  // Load from localStorage
+  /* ---------------------- Load / save localStorage -------------------- */
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -56,7 +67,6 @@ function TradingJournalApp() {
     }
   }, []);
 
-  // Save to localStorage
   useEffect(() => {
     localStorage.setItem(
       STORAGE_KEY,
@@ -64,38 +74,28 @@ function TradingJournalApp() {
     );
   }, [entries, customChecks]);
 
-  // Current week (use safeDate to avoid invalid-date crashes)
-  const sDate = useMemo(
-    () => startOfISOWeek(safeDate(selectedDate)),
-    [selectedDate]
-  );
-  const eDate = useMemo(
-    () => endOfISOWeek(safeDate(selectedDate)),
-    [selectedDate]
-  );
-  const currentKey = useMemo(
-    () => weekKey(safeDate(selectedDate)),
-    [selectedDate]
-  );
+  /* -------------------------- Derived dates -------------------------- */
+  const sDate = useMemo(() => startOfISOWeek(selectedDate), [selectedDate]);
+  const eDate = useMemo(() => endOfISOWeek(selectedDate), [selectedDate]);
+  const currentKey = useMemo(() => weekKey(selectedDate), [selectedDate]);
 
+  /* -------------------------- Entry scaffolds ------------------------- */
   const defaultAnswers = {
     stopLossPlaced: false,
     revengeTradeAfterOneSL: false,
     followedRiskManagement: false,
   };
-
   const emptyEntry = {
     context: "",
     answers: { ...defaultAnswers },
     customAnswers: {},
     stats: { numberOfTrades: 0, pnl: 0 },
     tags: [],
-    screenshots: [], // [{id,name,dataUrl}]
-    trades: [], // parsed trades for this week
+    screenshots: [],
+    trades: [],
     createdAt: null,
     updatedAt: null,
   };
-
   const current = entries[currentKey] || emptyEntry;
 
   const updateCurrent = (upd) => {
@@ -112,7 +112,7 @@ function TradingJournalApp() {
     }));
   };
 
-  // ---------- Small UI helpers ----------
+  /* --------------------------- UI helpers ---------------------------- */
   const Toggle = ({ label, checked, onChange, hint }) => (
     <label
       style={{
@@ -162,7 +162,7 @@ function TradingJournalApp() {
     </span>
   );
 
-  // Derived checklist score
+  /* ------------------------ Derived score/table ---------------------- */
   const yesCount =
     Object.values(current.answers).filter(Boolean).length +
     Object.values(current.customAnswers || {}).filter(Boolean).length;
@@ -170,7 +170,6 @@ function TradingJournalApp() {
     Object.keys(current.answers).length + (customChecks?.length || 0);
   const scorePct = totalChecks ? Math.round((yesCount / totalChecks) * 100) : 0;
 
-  // Past weeks table
   const allWeeks = useMemo(() => {
     const rows = Object.keys(entries).map((k) => {
       const [s, e] = k.split("_");
@@ -199,7 +198,7 @@ function TradingJournalApp() {
     );
   }, [entries, customChecks, filter]);
 
-  // Screenshots
+  /* ------------------------- Screenshots ----------------------------- */
   const fileToDataUrl = (file) =>
     new Promise((res, rej) => {
       const reader = new FileReader();
@@ -207,6 +206,7 @@ function TradingJournalApp() {
       reader.onerror = rej;
       reader.readAsDataURL(file);
     });
+
   const handleAddScreenshots = async (files) => {
     if (!files?.length) return;
     const maxEachMB = 2;
@@ -228,12 +228,13 @@ function TradingJournalApp() {
       screenshots: [...(current.screenshots || []), ...newShots],
     });
   };
+
   const removeScreenshot = (id) =>
     updateCurrent({
       screenshots: (current.screenshots || []).filter((s) => s.id !== id),
     });
 
-  // Tags
+  /* ---------------------- Tags & MT5 import -------------------------- */
   const addTag = (raw) => {
     const t = (raw || "").trim();
     if (!t) return;
@@ -242,12 +243,12 @@ function TradingJournalApp() {
   const removeTag = (t) =>
     updateCurrent({ tags: (current.tags || []).filter((x) => x !== t) });
 
-  // MT5 CSV import
   const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
   const isWithinWeek = (d, s, e) => {
-    const t = toLocalDate(d);
+    const t = atMidnight(d instanceof Date ? d : new Date(d));
     return t >= s && t <= e;
   };
+
   const splitCSVLine = (line) => {
     const res = [];
     let cur = "",
@@ -271,6 +272,7 @@ function TradingJournalApp() {
     res.push(cur);
     return res;
   };
+
   const parseMT5Date = (s) => {
     const trimmed = (s || "").trim();
     let m = trimmed.match(
@@ -284,6 +286,7 @@ function TradingJournalApp() {
     const dt = new Date(trimmed);
     return isNaN(dt.getTime()) ? null : dt;
   };
+
   const parseMT5CSV = (text) => {
     const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
     if (!lines.length) return [];
@@ -313,6 +316,7 @@ function TradingJournalApp() {
     }
     return out;
   };
+
   const handleImportMT5 = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -320,13 +324,9 @@ function TradingJournalApp() {
     reader.onload = () => {
       try {
         const trades = parseMT5CSV(String(reader.result));
-        const within = trades.filter((tr) =>
-          isWithinWeek(tr.time, sDate, eDate)
-        );
+        const within = trades.filter((tr) => isWithinWeek(tr.time, sDate, eDate));
         const numberOfTrades = within.length;
-        const pnl = round2(
-          within.reduce((a, t) => a + (t.profit || 0), 0)
-        );
+        const pnl = round2(within.reduce((a, t) => a + (t.profit || 0), 0));
         updateCurrent({ trades: within, stats: { numberOfTrades, pnl } });
         alert(`Imported ${within.length} trades for this week. PnL: ${pnl}`);
       } catch (err) {
@@ -336,19 +336,19 @@ function TradingJournalApp() {
     reader.readAsText(file);
   };
 
-  // ---------- Styles (centering + card) ----------
+  /* ------------------------------ Styles ----------------------------- */
   const pageStyle = {
     minHeight: "100vh",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    background: showPrintView ? "#ffffff" : "#0f172a", // dark bg when not printing
+    background: showPrintView ? "#ffffff" : "#0f172a",
     color: "#0f172a",
     padding: 20,
   };
   const cardStyle = {
     width: "100%",
-    maxWidth: 960, // ~max-w-4xl
+    maxWidth: 960,
     background: "#ffffff",
     borderRadius: 16,
     boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
@@ -376,7 +376,7 @@ function TradingJournalApp() {
     border: "1px solid #e5e7eb",
   };
 
-  // ---------- Render ----------
+  /* ------------------------------ Render ----------------------------- */
   return (
     <div style={pageStyle}>
       <div style={cardStyle}>
@@ -395,7 +395,10 @@ function TradingJournalApp() {
             Weekly Trading Journal
           </h1>
           <div>
-            <button style={buttonStyle} onClick={() => setSelectedDate(fmt(new Date()))}>
+            <button
+              style={buttonStyle}
+              onClick={() => setSelectedYMD(fmt(atMidnight(new Date())))}
+            >
               Use This Week
             </button>
             <button
@@ -466,8 +469,10 @@ function TradingJournalApp() {
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
               <input
                 type="date"
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value || fmt(new Date()))}
+                value={selectedYMD}
+                onChange={(e) =>
+                  setSelectedYMD(e.target.value || fmt(atMidnight(new Date())))
+                }
                 style={{ ...inputStyle, width: 180 }}
               />
               <Pill>
@@ -563,7 +568,7 @@ function TradingJournalApp() {
                   }
                 />
                 <Toggle
-                  label="Did you revenge trade after one SL?"
+                  label="You did not revenge trade after one SL?"
                   hint="Instant re-entry without a valid setup is revenge trading."
                   checked={current.answers.revengeTradeAfterOneSL}
                   onChange={(v) =>
@@ -739,80 +744,6 @@ function TradingJournalApp() {
             </div>
           </div>
 
-          {/* Screenshots */}
-          <div style={{ marginTop: 16 }}>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: 8,
-              }}
-            >
-              <h3 style={{ fontWeight: 700, margin: 0 }}>Screenshots</h3>
-              <label style={{ ...buttonStyle }}>
-                Add images
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  style={{ display: "none" }}
-                  onChange={(e) => handleAddScreenshots(e.target.files)}
-                />
-              </label>
-            </div>
-            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
-              Tip: keep each image under ~2 MB to avoid hitting browser storage
-              limits.
-            </div>
-            {(!current.screenshots || current.screenshots.length === 0) && (
-              <div style={{ fontSize: 13, color: "#6b7280" }}>
-                No screenshots yet.
-              </div>
-            )}
-            <div
-              style={{
-                display: "grid",
-                gap: 12,
-                gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
-              }}
-            >
-              {(current.screenshots || []).map((s) => (
-                <div
-                  key={s.id}
-                  style={{
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 12,
-                    padding: 8,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 8,
-                  }}
-                >
-                  <img
-                    src={s.dataUrl}
-                    alt={s.name}
-                    style={{
-                      width: "100%",
-                      height: 140,
-                      objectFit: "cover",
-                      borderRadius: 10,
-                    }}
-                  />
-                  <div style={{ fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={s.name}>
-                    {s.name}
-                  </div>
-                  <button
-                    onClick={() => removeScreenshot(s.id)}
-                    style={{ ...buttonStyle, padding: "6px 8px", alignSelf: "start" }}
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-
           <div style={{ marginTop: 16, fontSize: 13, color: "#6b7280" }}>
             Changes save automatically.
           </div>
@@ -858,7 +789,7 @@ function TradingJournalApp() {
                 {allWeeks.map((w) => (
                   <tr
                     key={w.key}
-                    onClick={() => setSelectedDate(w.start)}
+                    onClick={() => setSelectedYMD(w.start)}
                     style={{ borderBottom: "1px solid #f3f4f6", cursor: "pointer" }}
                   >
                     <td style={{ padding: "10px 12px", fontWeight: 600 }}>{w.start}</td>
@@ -895,3 +826,4 @@ function TradingJournalApp() {
 }
 
 export default TradingJournalApp;
+
