@@ -744,6 +744,88 @@ function TradingJournalApp() {
             </div>
           </div>
 
+          {/* ===== Screenshots panel (added back) ===== */}
+          <div style={{ marginTop: 16 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: 8,
+              }}
+            >
+              <h3 style={{ fontWeight: 700, margin: 0 }}>Screenshots</h3>
+              <label style={{ ...buttonStyle }}>
+                Add images
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={(e) => handleAddScreenshots(e.target.files)}
+                />
+              </label>
+            </div>
+            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+              Tip: keep each image under ~2 MB to avoid hitting browser storage limits.
+            </div>
+            {(!current.screenshots || current.screenshots.length === 0) && (
+              <div style={{ fontSize: 13, color: "#6b7280" }}>
+                No screenshots yet.
+              </div>
+            )}
+            <div
+              style={{
+                display: "grid",
+                gap: 12,
+                gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+              }}
+            >
+              {(current.screenshots || []).map((s) => (
+                <div
+                  key={s.id}
+                  style={{
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 12,
+                    padding: 8,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                  }}
+                >
+                  <img
+                    src={s.dataUrl}
+                    alt={s.name}
+                    style={{
+                      width: "100%",
+                      height: 140,
+                      objectFit: "cover",
+                      borderRadius: 10,
+                    }}
+                  />
+                  <div
+                    style={{
+                      fontSize: 12,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                    title={s.name}
+                  >
+                    {s.name}
+                  </div>
+                  <button
+                    onClick={() => removeScreenshot(s.id)}
+                    style={{ ...buttonStyle, padding: "6px 8px", alignSelf: "start" }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+          {/* ===== end Screenshots panel ===== */}
+
           <div style={{ marginTop: 16, fontSize: 13, color: "#6b7280" }}>
             Changes save automatically.
           </div>
@@ -826,4 +908,5 @@ function TradingJournalApp() {
 }
 
 export default TradingJournalApp;
+
 

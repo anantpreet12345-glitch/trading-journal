@@ -8,6 +8,7 @@ import AuthForm from "./AuthForm"; // make sure this file exists
  * - Listens for auth state changes (login / logout)
  * - If not logged in, shows <AuthForm />
  * - If logged in, renders children (function-as-children supported)
+ * - Auto-logout after 30 minutes of inactivity (cross-tab)
  */
 export default function AuthGate({ children }) {
   const [user, setUser] = useState(null);
@@ -36,6 +37,84 @@ export default function AuthGate({ children }) {
       listener?.subscription?.unsubscribe?.();
     };
   }, []);
+
+  // ---- AUTO LOGOUT (30 minutes inactivity, synced across tabs) ----
+  useEffect(() => {
+    if (!user) return; // only track when signed in
+
+    const IDLE_MS = 30 * 60 * 1000; // 30 minutes
+    let timerId = null;
+    let lastActivity = Date.now();
+
+    // cross-tab channel (best effort)
+    let bc = null;
+    try {
+      bc = new BroadcastChannel("auth-events");
+    } catch (_) {
+      // some browsers / environments may not support BroadcastChannel
+    }
+
+    const forceLogoutEverywhere = async () => {
+      try {
+        // optional: clear any local cache your app uses
+        try { localStorage.removeItem("trading_journal_v2"); } catch (_) {}
+        await supabase.auth.signOut();
+      } catch (e) {
+        console.error("Auto-logout signOut failed:", e);
+      } finally {
+        // notify other tabs
+        try { bc?.postMessage("force-logout"); } catch (_) {}
+        // localStorage fallback sync
+        try { localStorage.setItem("__force_logout__", String(Date.now())); } catch (_) {}
+      }
+    };
+
+    const resetTimer = () => {
+      lastActivity = Date.now();
+      if (timerId) clearTimeout(timerId);
+      timerId = setTimeout(checkIdle, IDLE_MS + 1000);
+    };
+
+    const checkIdle = () => {
+      if (Date.now() - lastActivity >= IDLE_MS) {
+        forceLogoutEverywhere();
+      } else {
+        resetTimer();
+      }
+    };
+
+    const onActivity = () => resetTimer();
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible" && Date.now() - lastActivity >= IDLE_MS) {
+        forceLogoutEverywhere();
+      } else {
+        resetTimer();
+      }
+    };
+
+    // User activity listeners
+    const events = ["mousemove", "mousedown", "keydown", "scroll", "touchstart"];
+    events.forEach((ev) => window.addEventListener(ev, onActivity, { passive: true }));
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    // Cross-tab listeners
+    const onBcMessage = (e) => { if (e?.data === "force-logout") forceLogoutEverywhere(); };
+    try { if (bc) bc.onmessage = onBcMessage; } catch (_) {}
+    const onStorage = (e) => { if (e.key === "__force_logout__") forceLogoutEverywhere(); };
+    window.addEventListener("storage", onStorage);
+
+    // start timer
+    resetTimer();
+
+    return () => {
+      if (timerId) clearTimeout(timerId);
+      events.forEach((ev) => window.removeEventListener(ev, onActivity));
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("storage", onStorage);
+      try { bc && bc.close(); } catch (_) {}
+    };
+  }, [user]);
 
   // While checking session, render nothing (or a tiny spinner if you prefer)
   if (!ready) return null;

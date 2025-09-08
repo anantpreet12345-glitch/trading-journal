@@ -1,60 +1,70 @@
-import { useEffect, useRef } from "react";
-
-/** Auto-logout after inactivity (works across tabs) */
-export function useIdleLogout({
-  enabled = true,
-  timeoutMs = 15 * 60 * 1000, // default 15 min
-  onTimeout,
-  storageKey = "last-activity",
-}) {
-  const timerRef = useRef(null);
-  const firedRef = useRef(false);
-
-  useEffect(() => {
+export default function useIdleLogout({ enabled = true, ms = 30 * 60 * 1000, onLogout }) {
+  React.useEffect(() => {
     if (!enabled) return;
 
-    const resetTimer = () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
-        if (!firedRef.current) {
-          firedRef.current = true;
-          onTimeout?.();
-        }
-      }, timeoutMs);
-    };
+    let timerId = null;
+    let last = Date.now();
 
-    const bump = () => {
-      firedRef.current = false;
-      localStorage.setItem(storageKey, String(Date.now()));
-      resetTimer();
-    };
+    // Cross-tab channel
+    let bc = null;
+    try { bc = new BroadcastChannel("auth-events"); } catch (_) {}
 
-    const events = ["mousemove", "keydown", "click", "scroll", "touchstart"];
-    events.forEach((e) => window.addEventListener(e, bump, { passive: true }));
-
-    bump(); // start
-
-    const onStorage = (e) => e.key === storageKey && resetTimer();
-    window.addEventListener("storage", onStorage);
-
-    const onVisibility = () => {
-      if (document.hidden) return;
-      const last = Number(localStorage.getItem(storageKey) || 0);
-      const idleFor = Date.now() - last;
-      if (idleFor >= timeoutMs && !firedRef.current) {
-        firedRef.current = true;
-        onTimeout?.();
-      } else {
-        resetTimer();
+    const doLogoutEverywhere = async () => {
+      try {
+        onLogout && (await onLogout());
+      } finally {
+        // notify other tabs
+        try { bc?.postMessage("force-logout"); } catch (_) {}
+        // localStorage ping fallback
+        try { localStorage.setItem("__force_logout__", String(Date.now())); } catch (_) {}
       }
     };
+
+    const reset = () => {
+      last = Date.now();
+      if (timerId) clearTimeout(timerId);
+      timerId = setTimeout(check, ms + 1000);
+    };
+
+    const check = () => {
+      if (Date.now() - last >= ms) {
+        doLogoutEverywhere();
+      } else {
+        reset();
+      }
+    };
+
+    const onActivity = () => reset();
+
+    const onVisibility = () => {
+      // If user returns and has been away longer than ms, logout immediately
+      if (document.visibilityState === "visible" && Date.now() - last >= ms) {
+        doLogoutEverywhere();
+      } else {
+        reset();
+      }
+    };
+
+    // Listen for user activity
+    const events = ["mousemove", "mousedown", "keydown", "scroll", "touchstart"];
+    events.forEach((ev) => window.addEventListener(ev, onActivity, { passive: true }));
     document.addEventListener("visibilitychange", onVisibility);
 
+    // Cross-tab listeners
+    const onBc = (e) => { if (e?.data === "force-logout") doLogoutEverywhere(); };
+    try { bc && (bc.onmessage = onBc); } catch (_) {}
+    const onStorage = (e) => { if (e.key === "__force_logout__") doLogoutEverywhere(); };
+    window.addEventListener("storage", onStorage);
+
+    // start the timer
+    reset();
+
     return () => {
-      events.forEach((e) => window.removeEventListener(e, bump));
-      window.removeEventListener("storage", onStorage);
+      if (timerId) clearTimeout(timerId);
+      events.forEach((ev) => window.removeEventListener(ev, onActivity));
       document.removeEventListener("visibilitychange", onVisibility);
-      if (timerRef.current) clearTimeout(timerRef.current);
+      window.removeEventListener("storage", onStorage);
+      try { bc && bc.close(); } catch (_) {}
     };
-  }, [enabled, timeoutMs, onTimeout, storageKey]);
+  }, [enabled, ms, onLogout]);
 }
